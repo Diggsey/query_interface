@@ -40,3 +40,21 @@ traits, including `ObjectClone`, `ObjectPartialEq`, `ObjectPartialOrd`, `ObjectH
 
 To improve usability, the non-object-safe versions of the traits are implemented directly on the `Object` trait
 object, allowing you to easily clone `Object`s and store them in collections.
+
+You can have your own `Object`-like traits to enforce some additional static requirements by using the `mopo!`
+macro:
+```rust
+trait CustomObject : Object {
+    ...
+}
+mopo!(CustomObject);
+
+struct Foo;
+interfaces!(Foo: CustomObject);
+
+impl CustomObject for Foo {
+    ...
+}
+```
+
+Now you can use `CustomObject` in all the ways you could use `Object`.
