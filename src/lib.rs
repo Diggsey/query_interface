@@ -30,11 +30,9 @@
 //! ```
 
 use std::any::{TypeId, Any};
-use std::mem;
 use std::ptr;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher, SipHasher};
-use std::fmt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -61,69 +59,123 @@ macro_rules! vtable_for {
     })
 }
 
+macro_rules! mopo {
+    ($name:ty) => (
+        impl $name {
+            pub fn query_ref<U: ::std::any::Any + ?Sized>(&self) -> Option<&U> {
+                if let Some(vtable) = self.query_vtable(::std::any::TypeId::of::<U>()) {
+                    unsafe {
+                        let data = self as *const Self;
+                        let u = $crate::TraitObject { data: data as *const (), vtable: vtable };
+                        Some(*::std::mem::transmute::<_, &&U>(&u))
+                    }
+                } else {
+                    None
+                }
+            }
+            pub fn query_mut<U: ::std::any::Any + ?Sized>(&mut self) -> Option<&mut U> {
+                if let Some(vtable) = self.query_vtable(::std::any::TypeId::of::<U>()) {
+                    unsafe {
+                        let data = self as *mut Self;
+                        let mut u = $crate::TraitObject { data: data as *const (), vtable: vtable };
+                        Some(*::std::mem::transmute::<_, &mut &mut U>(&mut u))
+                    }
+                } else {
+                    None
+                }
+            }
+            pub fn query<U: ::std::any::Any + ?Sized>(self: Box<Self>) -> Result<Box<U>, Box<Self>> {
+                if let Some(vtable) = self.query_vtable(::std::any::TypeId::of::<U>()) {
+                    unsafe {
+                        let data = Box::into_raw(self);
+                        let mut u = $crate::TraitObject { data: data as *const (), vtable: vtable };
+                        Ok(Box::from_raw(*::std::mem::transmute::<_, &mut *mut U>(&mut u)))
+                    }
+                } else {
+                    Err(self)
+                }
+            }
+            pub fn obj_partial_eq(&self, other: &Self) -> bool {
+                if let Some(x) = self.query_ref::<$crate::ObjectPartialEq>() {
+                    x.obj_eq(other.query_ref().unwrap())
+                } else {
+                    (self as *const Self) == (other as *const Self)
+                }
+            }
+            pub fn obj_partial_cmp(&self, other: &Self) -> Option<::std::cmp::Ordering> {
+                if let Some(x) = self.query_ref::<$crate::ObjectPartialOrd>() {
+                    x.obj_partial_cmp(other.query_ref().unwrap())
+                } else {
+                    None
+                }
+            }
+        }
+        impl ::std::clone::Clone for Box<$name> {
+            fn clone(&self) -> Self {
+                (**self).to_owned()
+            }
+        }
+        impl ::std::borrow::ToOwned for $name {
+            type Owned = Box<$name>;
+            fn to_owned(&self) -> Box<$name> {
+                self.query_ref::<$crate::ObjectClone>().expect("Object not clonable!").obj_clone().query::<$name>().unwrap()
+            }
+        }
+        impl ::std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+                if let Some(o) = self.query_ref::<::std::fmt::Debug>() {
+                    o.fmt(f)
+                } else {
+                    writeln!(f, "Object {{ <no `Debug` implementation> }}")
+                }
+            }
+        }
+        impl ::std::cmp::PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                // Require `Eq` rather than `PartialEq` as this allows `Object`s to be used as
+                // key in hash maps
+                if let Some(x) = self.query_ref::<$crate::ObjectEq>() {
+                    x.obj_eq(other.query_ref().unwrap())
+                } else {
+                    // This trivially meets the requirements of `Eq`
+                    (self as *const Self) == (other as *const Self)
+                }
+            }
+        }
+        impl ::std::cmp::Eq for $name {}
+        impl ::std::cmp::PartialOrd for $name {
+            fn partial_cmp(&self, other: &Self) -> Option<::std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl ::std::cmp::Ord for $name {
+            fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
+                if let Some(x) = self.query_ref::<$crate::ObjectOrd>() {
+                    if let Some(o) = x.obj_cmp(other.query_ref().unwrap()) {
+                        return o
+                    }
+                }
+                Ord::cmp(&(self as *const Self), &(other as *const Self))
+            }
+        }
+        impl ::std::hash::Hash for $name {
+            fn hash<H: ::std::hash::Hasher>(&self, state: &mut H) {
+                if let Some(x) = self.query_ref::<$crate::ObjectHash>() {
+                    x.obj_hash(state)
+                } else {
+                    state.write_usize(self as *const Self as *const () as usize)
+                }
+            }
+        }
+    )
+}
+
 pub unsafe trait Object: Any {
     fn query_vtable(&self, id: TypeId) -> Option<VTable>;
 }
 
-impl Object {
-    pub fn query_ref<U: Any + ?Sized>(&self) -> Option<&U> {
-        if let Some(vtable) = self.query_vtable(TypeId::of::<U>()) {
-            unsafe {
-                let data = self as *const Object;
-                let u = TraitObject { data: data as *const (), vtable: vtable };
-                Some(*mem::transmute::<_, &&U>(&u))
-            }
-        } else {
-            None
-        }
-    }
-    pub fn query_mut<U: Any + ?Sized>(&mut self) -> Option<&mut U> {
-        if let Some(vtable) = self.query_vtable(TypeId::of::<U>()) {
-            unsafe {
-                let data = self as *mut Object;
-                let mut u = TraitObject { data: data as *const (), vtable: vtable };
-                Some(*mem::transmute::<_, &mut &mut U>(&mut u))
-            }
-        } else {
-            None
-        }
-    }
-    pub fn query<U: Any + ?Sized>(self: Box<Self>) -> Result<Box<U>, Box<Self>> {
-        if let Some(vtable) = self.query_vtable(TypeId::of::<U>()) {
-            unsafe {
-                let data = Box::into_raw(self);
-                let mut u = TraitObject { data: data as *const (), vtable: vtable };
-                Ok(Box::from_raw(*mem::transmute::<_, &mut *mut U>(&mut u)))
-            }
-        } else {
-            Err(self)
-        }
-    }
-    pub fn obj_partial_eq(&self, other: &Object) -> bool {
-        if let Some(x) = self.query_ref::<ObjectPartialEq>() {
-            x.obj_eq(other)
-        } else {
-            (self as *const Object) == (other as *const Object)
-        }
-    }
-    pub fn obj_partial_cmp(&self, other: &Object) -> Option<Ordering> {
-        if let Some(x) = self.query_ref::<ObjectPartialOrd>() {
-            x.obj_partial_cmp(other)
-        } else {
-            None
-        }
-    }
-}
+mopo!(Object);
 
-impl fmt::Debug for Object {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(o) = self.query_ref::<fmt::Debug>() {
-            o.fmt(f)
-        } else {
-            writeln!(f, "Object {{ <no `Debug` implementation> }}")
-        }
-    }
-}
 
 pub trait ObjectClone {
     fn obj_clone(&self) -> Box<Object>;
@@ -131,17 +183,6 @@ pub trait ObjectClone {
 impl<T: Clone + Object> ObjectClone for T {
     fn obj_clone(&self) -> Box<Object> {
         Box::new(self.clone())
-    }
-}
-impl Clone for Box<Object> {
-    fn clone(&self) -> Self {
-        (**self).to_owned()
-    }
-}
-impl ToOwned for Object {
-    type Owned = Box<Object>;
-    fn to_owned(&self) -> Box<Object> {
-        self.query_ref::<ObjectClone>().expect("Object not clonable!").obj_clone()
     }
 }
 
@@ -157,22 +198,9 @@ impl<T: PartialEq + Object> ObjectPartialEq for T {
         }
     }
 }
-impl PartialEq for Object {
-    fn eq(&self, other: &Object) -> bool {
-        // Require `Eq` rather than `PartialEq` as this allows `Object`s to be used as
-        // key in hash maps
-        if let Some(x) = self.query_ref::<ObjectEq>() {
-            x.obj_eq(other)
-        } else {
-            // This trivially meets the requirements of `Eq`
-            (self as *const Object) == (other as *const Object)
-        }
-    }
-}
 
 pub trait ObjectEq: ObjectPartialEq {}
 impl<T: Eq + Object> ObjectEq for T {}
-impl Eq for Object {}
 
 pub trait ObjectPartialOrd {
     fn obj_partial_cmp(&self, other: &Object) -> Option<Ordering>;
@@ -184,11 +212,6 @@ impl<T: PartialOrd + Object> ObjectPartialOrd for T {
         } else {
             None
         }
-    }
-}
-impl PartialOrd for Object {
-    fn partial_cmp(&self, other: &Object) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
 
@@ -204,16 +227,6 @@ impl<T: Ord + Object> ObjectOrd for T {
         }
     }
 }
-impl Ord for Object {
-    fn cmp(&self, other: &Object) -> Ordering {
-        if let Some(x) = self.query_ref::<ObjectOrd>() {
-            if let Some(o) = x.obj_cmp(other) {
-                return o
-            }
-        }
-        Ord::cmp(&(self as *const Object), &(other as *const Object))
-    }
-}
 
 pub trait ObjectHash {
     fn obj_hash(&self, state: &mut Hasher);
@@ -223,15 +236,6 @@ impl<T: Hash + Object> ObjectHash for T {
         let mut h = SipHasher::new();
         self.hash(&mut h);
         state.write_u64(h.finish());
-    }
-}
-impl Hash for Object {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        if let Some(x) = self.query_ref::<ObjectHash>() {
-            x.obj_hash(state)
-        } else {
-            state.write_usize(self as *const Object as *const () as usize)
-        }
     }
 }
 
@@ -260,7 +264,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct Bar;
-    interfaces!(Bar: Foo, super::ObjectClone, Debug);
+    interfaces!(Bar: Foo, super::ObjectClone, Debug, Custom);
 
     trait Foo: Debug {
         fn test(&self) -> bool { false }
@@ -313,4 +317,19 @@ mod tests {
         assert!(bar.is_ok());
     }
 
+    trait Custom : super::Object {}
+    impl Custom for Bar {}
+    mopo!(Custom);
+
+    #[test]
+    fn test_derived() {
+        let x = Box::new(Bar) as Box<Custom>;
+        let foo: Result<Box<Foo>, _> = x.clone().query();
+        assert!(foo.is_ok());
+        assert!(foo.unwrap().test());
+        let foo2: Result<Box<Foo2>, _> = x.clone().query();
+        assert!(foo2.is_err());
+        let bar: Result<Box<Bar>, _> = x.clone().query();
+        assert!(bar.is_ok());
+    }
 }

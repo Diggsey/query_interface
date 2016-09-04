@@ -1,6 +1,6 @@
 [package]
 name = "query_interface"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Diggory Blake <diggsey@googlemail.com>"]
 description = "Dynamically query a type-erased object for any trait implementation"
 repository = "https://github.com/Diggsey/query_interface"
