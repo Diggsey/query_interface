@@ -3,7 +3,7 @@
 //! ```rust
 //! #[macro_use]
 //! extern crate query_interface;
-//! use query_interface::{Object, ObjectExt, ObjectClone};
+//! use query_interface::{Object, ObjectClone};
 //! use std::fmt::Debug;
 //!
 //! #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -65,17 +65,11 @@ pub unsafe trait Object: Any {
     fn query_vtable(&self, id: TypeId) -> Option<VTable>;
 }
 
-pub trait ObjectExt {
-    fn query_ref<U: Any + ?Sized>(&self) -> Option<&U>;
-    fn query_mut<U: Any + ?Sized>(&mut self) -> Option<&mut U>;
-    fn query<U: Any + ?Sized>(self: Box<Self>) -> Result<Box<U>, Box<Self>>;
-}
-
-impl<T: Object + ?Sized> ObjectExt for T {
-    fn query_ref<U: Any + ?Sized>(&self) -> Option<&U> {
+impl Object {
+    pub fn query_ref<U: Any + ?Sized>(&self) -> Option<&U> {
         if let Some(vtable) = self.query_vtable(TypeId::of::<U>()) {
             unsafe {
-                let data = self as *const T;
+                let data = self as *const Object;
                 let u = TraitObject { data: data as *const (), vtable: vtable };
                 Some(*mem::transmute::<_, &&U>(&u))
             }
@@ -83,10 +77,10 @@ impl<T: Object + ?Sized> ObjectExt for T {
             None
         }
     }
-    fn query_mut<U: Any + ?Sized>(&mut self) -> Option<&mut U> {
+    pub fn query_mut<U: Any + ?Sized>(&mut self) -> Option<&mut U> {
         if let Some(vtable) = self.query_vtable(TypeId::of::<U>()) {
             unsafe {
-                let data = self as *mut T;
+                let data = self as *mut Object;
                 let mut u = TraitObject { data: data as *const (), vtable: vtable };
                 Some(*mem::transmute::<_, &mut &mut U>(&mut u))
             }
@@ -94,7 +88,7 @@ impl<T: Object + ?Sized> ObjectExt for T {
             None
         }
     }
-    fn query<U: Any + ?Sized>(self: Box<Self>) -> Result<Box<U>, Box<Self>> {
+    pub fn query<U: Any + ?Sized>(self: Box<Self>) -> Result<Box<U>, Box<Self>> {
         if let Some(vtable) = self.query_vtable(TypeId::of::<U>()) {
             unsafe {
                 let data = Box::into_raw(self);
@@ -103,6 +97,20 @@ impl<T: Object + ?Sized> ObjectExt for T {
             }
         } else {
             Err(self)
+        }
+    }
+    pub fn obj_partial_eq(&self, other: &Object) -> bool {
+        if let Some(x) = self.query_ref::<ObjectPartialEq>() {
+            x.obj_eq(other)
+        } else {
+            (self as *const Object) == (other as *const Object)
+        }
+    }
+    pub fn obj_partial_cmp(&self, other: &Object) -> Option<Ordering> {
+        if let Some(x) = self.query_ref::<ObjectPartialOrd>() {
+            x.obj_partial_cmp(other)
+        } else {
+            None
         }
     }
 }
@@ -151,9 +159,12 @@ impl<T: PartialEq + Object> ObjectPartialEq for T {
 }
 impl PartialEq for Object {
     fn eq(&self, other: &Object) -> bool {
-        if let Some(x) = self.query_ref::<ObjectPartialEq>() {
+        // Require `Eq` rather than `PartialEq` as this allows `Object`s to be used as
+        // key in hash maps
+        if let Some(x) = self.query_ref::<ObjectEq>() {
             x.obj_eq(other)
         } else {
+            // This trivially meets the requirements of `Eq`
             (self as *const Object) == (other as *const Object)
         }
     }
@@ -161,6 +172,7 @@ impl PartialEq for Object {
 
 pub trait ObjectEq: ObjectPartialEq {}
 impl<T: Eq + Object> ObjectEq for T {}
+impl Eq for Object {}
 
 pub trait ObjectPartialOrd {
     fn obj_partial_cmp(&self, other: &Object) -> Option<Ordering>;
@@ -176,13 +188,30 @@ impl<T: PartialOrd + Object> ObjectPartialOrd for T {
 }
 impl PartialOrd for Object {
     fn partial_cmp(&self, other: &Object) -> Option<Ordering> {
-        if let Some(x) = self.query_ref::<ObjectPartialOrd>() {
-            x.obj_partial_cmp(other)
-        } else if (self as *const Object) == (other as *const Object) {
-            Some(Ordering::Equal)
+        Some(self.cmp(other))
+    }
+}
+
+pub trait ObjectOrd {
+    fn obj_cmp(&self, other: &Object) -> Option<Ordering>;
+}
+impl<T: Ord + Object> ObjectOrd for T {
+    fn obj_cmp(&self, other: &Object) -> Option<Ordering> {
+        if let Some(o) = other.query_ref::<Self>() {
+            Some(self.cmp(o))
         } else {
             None
         }
+    }
+}
+impl Ord for Object {
+    fn cmp(&self, other: &Object) -> Ordering {
+        if let Some(x) = self.query_ref::<ObjectOrd>() {
+            if let Some(o) = x.obj_cmp(other) {
+                return o
+            }
+        }
+        Ord::cmp(&(self as *const Object), &(other as *const Object))
     }
 }
 
@@ -228,7 +257,6 @@ macro_rules! interfaces {
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
-    use super::ObjectExt;
 
     #[derive(Debug, Clone)]
     struct Bar;

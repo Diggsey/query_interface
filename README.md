@@ -8,7 +8,7 @@ Example:
 #[macro_use]
 extern crate query_interface;
 
-use query_interface::{Object, ObjectExt, ObjectClone};
+use query_interface::{Object, ObjectClone};
 use std::fmt::Debug;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
