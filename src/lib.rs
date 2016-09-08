@@ -175,6 +175,8 @@ pub unsafe trait Object: Any {
     fn query_vtable(&self, id: TypeId) -> Option<VTable>;
 }
 
+pub unsafe trait HasInterface<I: ?Sized> {}
+
 mopo!(Object);
 
 
@@ -243,6 +245,9 @@ impl<T: Hash + Object> ObjectHash for T {
 #[macro_export]
 macro_rules! interfaces {
     ($name:ty: $($iface:ty),+) => (
+        unsafe impl $crate::HasInterface<$name> for $name {}
+        unsafe impl $crate::HasInterface<$crate::Object> for $name {}
+        $(unsafe impl $crate::HasInterface<$iface> for $name {})*
         unsafe impl $crate::Object for $name {
             fn query_vtable(&self, id: ::std::any::TypeId) -> Option<$crate::VTable> {
                 if id == ::std::any::TypeId::of::<$name>() {
