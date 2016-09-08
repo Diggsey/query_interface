@@ -34,6 +34,9 @@ use std::ptr;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher, SipHasher};
 
+/// Represents a trait object's vtable pointer. You shouldn't need to use this as a
+/// consumer of the crate but it is required for macro expansion.
+#[doc(hidden)]
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct VTable(*const ());
@@ -44,6 +47,9 @@ impl VTable {
     }
 }
 
+/// Represents a trait object's layout. You shouldn't need to use this as a
+/// consumer of the crate but it is required for macro expansion.
+#[doc(hidden)]
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct TraitObject {
@@ -51,6 +57,9 @@ pub struct TraitObject {
     pub vtable: VTable
 }
 
+/// Obtain the vtable for a type/trait pair. You shouldn't need to use this as a
+/// consumer of the crate but it is required for macro expansion.
+#[doc(hidden)]
 #[macro_export]
 macro_rules! vtable_for {
     ($x:ty as $y:ty) => ({
@@ -59,6 +68,22 @@ macro_rules! vtable_for {
     })
 }
 
+/// Define a custom Object-like trait. The `query`, `query_ref` an `query_mut`
+/// methods will be automatically implemented on this trait object.
+/// 
+/// You may add additional static bounds to your custom trait via the
+/// `HasInterface<I>` trait. This example will statically ensure that all
+/// types convertible to `MyObject` can be cloned. Your trait must extend
+/// `Object`.
+/// 
+/// ```rust
+/// # #[macro_use]
+/// # extern crate query_interface;
+/// # use query_interface::*;
+/// trait MyObject: Object + ObjectClone + HasInterface<ObjectClone> { }
+/// mopo!(MyObject);
+/// # fn main() {}
+/// ```
 #[macro_export]
 macro_rules! mopo {
     ($name:ty) => (
@@ -171,15 +196,34 @@ macro_rules! mopo {
     )
 }
 
+/// This trait is the primary function of the library. `Object` trait objects
+/// can be freely queried for any other trait, allowing conversion between
+/// trait objects.
 pub unsafe trait Object: Any {
+    /// This is implemented by the `interfaces!` macro, and should never be
+    /// manually implemented.
+    #[doc(hidden)]
     fn query_vtable(&self, id: TypeId) -> Option<VTable>;
 }
 
+/// You can use this trait to ensure that a type implements a trait as an
+/// interface. This means the type declared the trait in its `interfaces!(...)`
+/// list, and guarantees that querying an `Object` of that type for the trait
+/// will always succeed.
+/// 
+/// When using `HasInterface<SomeTrait>` in a generic bound, you should also
+/// specify `SomeTrait` as a bound. While `HasInterface<SomeTrait>` is a more
+/// stringent requirement than, and in practice implies `SomeTrait`, the
+/// compiler cannot deduce that because it is enforced through macros rather
+/// than the type system.
 pub unsafe trait HasInterface<I: ?Sized> {}
 
 mopo!(Object);
 
 
+/// This is an object-safe version of `Clone`, which is automatically
+/// implemented for all `Clone + Object` types. This is a support trait used to
+/// allow `Object` trait objects to be clonable.
 pub trait ObjectClone {
     fn obj_clone(&self) -> Box<Object>;
 }
@@ -189,6 +233,9 @@ impl<T: Clone + Object> ObjectClone for T {
     }
 }
 
+/// This is an object-safe version of `PartialEq`, which is automatically
+/// implemented for all `PartialEq + Object` types. This is a support trait used to
+/// allow `Object` trait objects to be comparable in this way.
 pub trait ObjectPartialEq {
     fn obj_eq(&self, other: &Object) -> bool;
 }
@@ -202,9 +249,15 @@ impl<T: PartialEq + Object> ObjectPartialEq for T {
     }
 }
 
+/// This is an object-safe version of `Eq`, which is automatically
+/// implemented for all `Eq + Object` types. This is a support trait used to
+/// allow `Object` trait objects to be comparable in this way.
 pub trait ObjectEq: ObjectPartialEq {}
 impl<T: Eq + Object> ObjectEq for T {}
 
+/// This is an object-safe version of `PartialOrd`, which is automatically
+/// implemented for all `PartialOrd + Object` types. This is a support trait used to
+/// allow `Object` trait objects to be comparable in this way.
 pub trait ObjectPartialOrd {
     fn obj_partial_cmp(&self, other: &Object) -> Option<Ordering>;
 }
@@ -218,6 +271,9 @@ impl<T: PartialOrd + Object> ObjectPartialOrd for T {
     }
 }
 
+/// This is an object-safe version of `Ord`, which is automatically
+/// implemented for all `Ord + Object` types. This is a support trait used to
+/// allow `Object` trait objects to be comparable in this way.
 pub trait ObjectOrd {
     fn obj_cmp(&self, other: &Object) -> Option<Ordering>;
 }
@@ -231,6 +287,12 @@ impl<T: Ord + Object> ObjectOrd for T {
     }
 }
 
+/// This is an object-safe version of `Hash`, which is automatically
+/// implemented for all `Hash + Object` types. This is a support trait used to
+/// allow `Object` trait objects to be comparable in this way.
+///
+/// Note: `Object`s are not guaranteed to hash to the same value as their
+/// underlying type.
 pub trait ObjectHash {
     fn obj_hash(&self, state: &mut Hasher);
 }
@@ -242,6 +304,20 @@ impl<T: Hash + Object> ObjectHash for T {
     }
 }
 
+/// Allow a set of traits to be dynamically queried from a type when it is
+/// stored as an `Object` trait object.
+/// 
+/// Example use:
+/// 
+/// ```rust
+/// # #[macro_use]
+/// # extern crate query_interface;
+/// # use query_interface::*;
+/// #[derive(Clone)]
+/// struct Foo;
+/// interfaces!(Foo: ObjectClone);
+/// # fn main() {}
+/// ```
 #[macro_export]
 macro_rules! interfaces {
     ($name:ty: $($iface:ty),+) => (
