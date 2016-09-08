@@ -59,6 +59,7 @@ macro_rules! vtable_for {
     })
 }
 
+#[macro_export]
 macro_rules! mopo {
     ($name:ty) => (
         impl $name {

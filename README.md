@@ -1,7 +1,7 @@
 # query_interface
 Dynamically query a type-erased object for any trait implementation
 
-[Documentation](https://docs.rs/query_interface/0.1.0/query_interface/)
+[Documentation](https://docs.rs/query_interface/)
 
 Example:
 ```rust
