@@ -110,7 +110,7 @@ macro_rules! mopo {
                     None
                 }
             }
-            pub fn query<U: ::std::any::Any + ?Sized>(self: Box<Self>) -> Result<Box<U>, Box<Self>> {
+            pub fn query<U: ::std::any::Any + ?Sized>(self: Box<Self>) -> ::std::result::Result<Box<U>, Box<Self>> {
                 if let Some(vtable) = self.query_vtable(::std::any::TypeId::of::<U>()) {
                     unsafe {
                         let data = Box::into_raw(self);
