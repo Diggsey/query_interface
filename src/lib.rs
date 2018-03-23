@@ -28,11 +28,11 @@
 //!     obj2.query_ref::<Bar>().unwrap().do_something();  // Prints: "I'm a Foo!"
 //! }
 //! ```
-
 use std::any::{TypeId, Any};
 use std::ptr;
 use std::cmp::Ordering;
-use std::hash::{Hash, Hasher, SipHasher};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 /// Represents a trait object's vtable pointer. You shouldn't need to use this as a
 /// consumer of the crate but it is required for macro expansion.
@@ -68,7 +68,7 @@ macro_rules! vtable_for {
     })
 }
 
-/// Define a custom Object-like trait. The `query`, `query_ref` an `query_mut`
+/// Define a custom Object-like trait. The `query`, `query_ref` and `query_mut`
 /// methods will be automatically implemented on this trait object.
 /// 
 /// You may add additional static bounds to your custom trait via the
@@ -298,7 +298,7 @@ pub trait ObjectHash {
 }
 impl<T: Hash + Object> ObjectHash for T {
     fn obj_hash(&self, state: &mut Hasher) {
-        let mut h = SipHasher::new();
+        let mut h = DefaultHasher::new();
         self.hash(&mut h);
         state.write_u64(h.finish());
     }
@@ -320,11 +320,12 @@ impl<T: Hash + Object> ObjectHash for T {
 /// ```
 #[macro_export]
 macro_rules! interfaces {
-    ($name:ty: $($iface:ty),+) => (
-        unsafe impl $crate::HasInterface<$name> for $name {}
-        unsafe impl $crate::HasInterface<$crate::Object> for $name {}
-        $(unsafe impl $crate::HasInterface<$iface> for $name {})*
-        unsafe impl $crate::Object for $name {
+    (@unbracket $(($($v:tt)*))*) => ($($($v)*)*);
+    (@inner $imp:tt $cond:tt $name:ty: $($iface:ty),+ {}) => (
+        interfaces!(@unbracket $imp ($crate::HasInterface<$name> for $name) $cond ({}));
+        interfaces!(@unbracket $imp ($crate::HasInterface<$crate::Object> for $name) $cond ({}));
+        $(interfaces!(@unbracket $imp ($crate::HasInterface<$iface> for $name) $cond ({}));)*
+        interfaces!(@unbracket $imp ($crate::Object for $name) $cond ({
             fn query_vtable(&self, id: ::std::any::TypeId) -> Option<$crate::VTable> {
                 if id == ::std::any::TypeId::of::<$name>() {
                     Some($crate::VTable::none())
@@ -336,8 +337,41 @@ macro_rules! interfaces {
                     None
                 }
             }
-        }
-    )
+        }));
+    );
+    (@imp ($($result:tt)*) $name:ty: $($iface:ty),+ $(where $($cond:tt)*)*) => (
+        interfaces!(@inner (unsafe impl<$($result)*>) ($(where $($cond)*)*) $name: $($iface),+ {});
+    );
+    (@parse < $($rest:tt)*) => (
+        interfaces!(@parseArg () $($rest)*);
+    );
+    (@parse $($rest:tt)*) => (
+        interfaces!(@imp () $($rest)*);
+    );
+    (@parseArg ($($result:tt)*) $name:ident , $($rest:tt)*) => (
+        interfaces!(@parseArg ($($result)* $name ,) $($rest)*);
+    );
+    (@parseArg ($($result:tt)*) $name:ident : $($rest:tt)*) => (
+        interfaces!(@parseBound ($($result)* $name : ) $($rest)*);
+    );
+    (@parseArg ($($result:tt)*) $name:ident > $($rest:tt)*) => (
+        interfaces!(@imp ($($result)* $name) $($rest)*);
+    );
+    (@parseBound ($($result:tt)*) $bound:tt + $($rest:tt)*) => (
+        interfaces!(@parseBound ($($result)* $bound +) $($rest)*);
+    );
+    (@parseBound ($($result:tt)*) $bound:tt , $($rest:tt)*) => (
+        interfaces!(@parseArg ($($result)* $bound ,) $($rest)*);
+    );
+    (@parseBound ($($result:tt)*) $bound:tt > $($rest:tt)*) => (
+        interfaces!(@imp ($($result)* $bound) $($rest)*);
+    );
+    ($x:ident $($rest:tt)*) => (
+        interfaces!(@parse $x $($rest)*);
+    );
+    (< $($rest:tt)*) => (
+        interfaces!(@parse < $($rest)*);
+    );
 }
 
 #[cfg(test)]
@@ -356,6 +390,10 @@ mod tests {
         fn test(&self) -> bool { true }
     }
     impl Foo2 for Bar {}
+
+    #[derive(Debug, Clone)]
+    struct GenericBar<T>(T);
+    interfaces!(<T: Debug + 'static> GenericBar<T>: super::ObjectClone, Debug where T: Clone);
 
     #[test]
     fn test_ref() {
