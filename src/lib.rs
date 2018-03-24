@@ -28,11 +28,21 @@
 //!     obj2.query_ref::<Bar>().unwrap().do_something();  // Prints: "I'm a Foo!"
 //! }
 //! ```
+#[cfg(feature = "dynamic")]
+#[macro_use]
+extern crate lazy_static;
+
 use std::any::{TypeId, Any};
 use std::ptr;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::fmt::{Debug, Display};
+use std::path::PathBuf;
+
+#[cfg(feature = "dynamic")]
+#[macro_use]
+pub mod dynamic;
 
 /// Represents a trait object's vtable pointer. You shouldn't need to use this as a
 /// consumer of the crate but it is required for macro expansion.
@@ -46,6 +56,9 @@ impl VTable {
         VTable(ptr::null())
     }
 }
+
+unsafe impl Send for VTable {}
+unsafe impl Sync for VTable {}
 
 /// Represents a trait object's layout. You shouldn't need to use this as a
 /// consumer of the crate but it is required for macro expansion.
@@ -64,6 +77,7 @@ pub struct TraitObject {
 macro_rules! vtable_for {
     ($x:ty as $y:ty) => ({
         let x = ::std::ptr::null::<$x>() as *const $y;
+        #[allow(unused_unsafe)]
         unsafe { ::std::mem::transmute::<_, $crate::TraitObject>(x).vtable }
     })
 }
@@ -119,6 +133,28 @@ macro_rules! mopo {
                     }
                 } else {
                     Err(self)
+                }
+            }
+            pub fn query_arc<U: ::std::any::Any + ?Sized>(self_: ::std::sync::Arc<Self>) -> ::std::result::Result<::std::sync::Arc<U>, ::std::sync::Arc<Self>> {
+                if let Some(vtable) = self_.query_vtable(::std::any::TypeId::of::<U>()) {
+                    unsafe {
+                        let data = ::std::sync::Arc::into_raw(self_);
+                        let mut u = $crate::TraitObject { data: data as *const (), vtable: vtable };
+                        Ok(::std::sync::Arc::from_raw(*::std::mem::transmute::<_, &mut *mut U>(&mut u)))
+                    }
+                } else {
+                    Err(self_)
+                }
+            }
+            pub fn query_rc<U: ::std::any::Any + ?Sized>(self_: ::std::rc::Rc<Self>) -> ::std::result::Result<::std::rc::Rc<U>, ::std::rc::Rc<Self>> {
+                if let Some(vtable) = self_.query_vtable(::std::any::TypeId::of::<U>()) {
+                    unsafe {
+                        let data = ::std::rc::Rc::into_raw(self_);
+                        let mut u = $crate::TraitObject { data: data as *const (), vtable: vtable };
+                        Ok(::std::rc::Rc::from_raw(*::std::mem::transmute::<_, &mut *mut U>(&mut u)))
+                    }
+                } else {
+                    Err(self_)
                 }
             }
             pub fn obj_partial_eq(&self, other: &Self) -> bool {
@@ -334,7 +370,13 @@ macro_rules! interfaces {
                 } else $(if id == ::std::any::TypeId::of::<$iface>() {
                     Some(vtable_for!($name as $iface))
                 } else)* {
-                    None
+                    // If "dynamic" feature is enabled, fall back to
+                    // looking in the registry
+                    #[cfg(feature = "dynamic")]
+                    { $crate::dynamic::find_in_registry::<$name>(id) }
+                    // No dynamic lookup
+                    #[cfg(not(feature = "dynamic"))]
+                    { None }
                 }
             }
         }));
@@ -366,17 +408,56 @@ macro_rules! interfaces {
     (@parseBound ($($result:tt)*) $bound:tt > $($rest:tt)*) => (
         interfaces!(@imp ($($result)* $bound) $($rest)*);
     );
-    ($x:ident $($rest:tt)*) => (
-        interfaces!(@parse $x $($rest)*);
-    );
     (< $($rest:tt)*) => (
         interfaces!(@parse < $($rest)*);
     );
+    ($x:ty: $($rest:tt)*) => (
+        interfaces!(@parse $x: $($rest)*);
+    );
+    (@expand2 ($name:ty) ($($rest:tt)*)) => (
+        interfaces!($name $($rest)*);
+    );
+    (@expand {$($name:ty),*} $rest:tt) => (
+        $( interfaces!(@expand2 ($name) $rest); )*
+    );
+    ({$($name:ty),*} $($rest:tt)*) => (
+        interfaces!(@expand {$($name),*} ($($rest)*));
+    );
 }
+
+// Integral types
+interfaces!({
+    bool, i8, u8, i16, u16, i32, u32, i64, u64, char
+}: ObjectClone, Debug, Display, ObjectPartialEq, ObjectPartialOrd, ObjectEq, ObjectOrd, ObjectHash, ToString);
+
+// Floating point types
+interfaces!({
+    f32, f64
+}: ObjectClone, Debug, Display, ObjectPartialEq, ObjectPartialOrd, ToString);
+
+// Strings
+interfaces!(String: ObjectClone, Debug, Display, ObjectPartialEq, ObjectPartialOrd, ObjectEq, ObjectOrd, ObjectHash, ToString);
+
+// Paths
+interfaces!(PathBuf: ObjectClone, Debug, ObjectPartialEq, ObjectPartialOrd, ObjectEq, ObjectOrd, ObjectHash);
+
+// Vecs
+interfaces!({
+    Vec<bool>, Vec<i8>, Vec<u8>, Vec<i16>, Vec<u16>, Vec<i32>, Vec<u32>, Vec<i64>, Vec<u64>, Vec<char>
+}: ObjectClone, Debug, ObjectPartialEq, ObjectPartialOrd, ObjectEq, ObjectOrd, ObjectHash);
+interfaces!({
+    Vec<f32>, Vec<f64>
+}: ObjectClone, Debug, ObjectPartialEq, ObjectPartialOrd);
+interfaces!({
+    Vec<String>, Vec<PathBuf>
+}: ObjectClone, Debug, ObjectPartialEq, ObjectPartialOrd, ObjectEq, ObjectOrd, ObjectHash);
+
 
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
+    use std::sync::Arc;
+    use std::rc::Rc;
 
     #[derive(Debug, Clone)]
     struct Bar;
@@ -437,6 +518,30 @@ mod tests {
         assert!(bar.is_ok());
     }
 
+    #[test]
+    fn test_rc() {
+        let x = Rc::new(Bar) as Rc<super::Object>;
+        let foo: Result<Rc<Foo>, _> = super::Object::query_rc(x.clone());
+        assert!(foo.is_ok());
+        assert!(foo.unwrap().test());
+        let foo2: Result<Rc<Foo2>, _> = super::Object::query_rc(x.clone());
+        assert!(foo2.is_err());
+        let bar: Result<Rc<Bar>, _> = super::Object::query_rc(x.clone());
+        assert!(bar.is_ok());
+    }
+
+    #[test]
+    fn test_arc() {
+        let x = Arc::new(Bar) as Arc<super::Object>;
+        let foo: Result<Arc<Foo>, _> = super::Object::query_arc(x.clone());
+        assert!(foo.is_ok());
+        assert!(foo.unwrap().test());
+        let foo2: Result<Arc<Foo2>, _> = super::Object::query_arc(x.clone());
+        assert!(foo2.is_err());
+        let bar: Result<Arc<Bar>, _> = super::Object::query_arc(x.clone());
+        assert!(bar.is_ok());
+    }
+
     trait Custom : super::Object {}
     impl Custom for Bar {}
     mopo!(Custom);
@@ -451,5 +556,34 @@ mod tests {
         assert!(foo2.is_err());
         let bar: Result<Box<Bar>, _> = x.clone().query();
         assert!(bar.is_ok());
+    }
+
+    trait Dynamic {
+        fn test(&self) -> u32;
+    }
+    impl Dynamic for Bar {
+        fn test(&self) -> u32 { 42 }
+    }
+
+    #[test]
+    fn test_dynamic() {
+        let x = Box::new(Bar) as Box<super::Object>;
+        let dyn1: Option<&Dynamic> = x.query_ref();
+        assert!(dyn1.is_none());
+
+        dynamic_interfaces! {
+            Bar: Dynamic;
+        }
+
+        let dyn2: Option<&Dynamic> = x.query_ref();
+        assert!(dyn2.unwrap().test() == 42);
+    }
+
+    #[test]
+    fn test_primitives() {
+        Box::new(1) as Box<super::Object>;
+        Box::new(1f32) as Box<super::Object>;
+        Box::new("test".to_string()) as Box<super::Object>;
+        Box::new(vec![1,2,3]) as Box<super::Object>;
     }
 }

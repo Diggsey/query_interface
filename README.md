@@ -58,3 +58,17 @@ impl CustomObject for Foo {
 ```
 
 Now you can use `CustomObject` in all the ways you could use `Object`.
+
+With the "dynamic" feature, you can *at runtime* register additional traits to be queryable on a type. This
+allows you to bypass the normal coherence rules:
+
+```rust
+trait Custom {}
+impl Custom for String {}
+
+fn main() {
+    dynamic_interfaces! {
+        String: Custom;
+    }
+}
+```
