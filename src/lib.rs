@@ -354,7 +354,7 @@ impl<T: Hash + Object> ObjectHash for T {
 /// interfaces!(Foo: ObjectClone);
 /// # fn main() {}
 /// ```
-#[macro_export]
+#[macro_export(local_inner_macros)]
 macro_rules! interfaces {
     (@unbracket $(($($v:tt)*))*) => ($($($v)*)*);
     (@inner $imp:tt $cond:tt $name:ty: $($iface:ty),+ {}) => (
