@@ -9,7 +9,7 @@
 //! #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 //! struct Foo;
 //!
-//! interfaces!(Foo: ObjectClone, Debug, Bar);
+//! interfaces!(Foo: dyn ObjectClone, dyn Debug, dyn Bar);
 //!
 //! trait Bar {
 //!     fn do_something(&self);
@@ -21,11 +21,11 @@
 //! }
 //!
 //! fn main() {
-//!     let obj = Box::new(Foo) as Box<Object>;
+//!     let obj = Box::new(Foo) as Box<dyn Object>;
 //!     let obj2 = obj.clone();
 //!     println!("{:?}", obj2);
 //!
-//!     obj2.query_ref::<Bar>().unwrap().do_something();  // Prints: "I'm a Foo!"
+//!     obj2.query_ref::<dyn Bar>().unwrap().do_something();  // Prints: "I'm a Foo!"
 //! }
 //! ```
 #[cfg(feature = "dynamic")]
@@ -96,8 +96,8 @@ macro_rules! vtable_for {
 /// # #[macro_use]
 /// # extern crate query_interface;
 /// # use query_interface::*;
-/// trait MyObject: Object + ObjectClone + HasInterface<ObjectClone> { }
-/// mopo!(MyObject);
+/// trait MyObject: Object + ObjectClone + HasInterface<dyn ObjectClone> { }
+/// // mopo!(dyn MyObject);
 /// # fn main() {}
 /// ```
 #[macro_export]
@@ -270,7 +270,7 @@ macro_rules! mopo {
 /// This trait is the primary function of the library. `Object` trait objects
 /// can be freely queried for any other trait, allowing conversion between
 /// trait objects.
-pub unsafe trait Object: Any {
+pub unsafe trait Object: Any + Send + Sync {
     /// This is implemented by the `interfaces!` macro, and should never be
     /// manually implemented.
     #[doc(hidden)]
@@ -385,7 +385,7 @@ impl<T: Hash + Object> ObjectHash for T {
 /// # use query_interface::*;
 /// #[derive(Clone)]
 /// struct Foo;
-/// interfaces!(Foo: ObjectClone);
+/// interfaces!(Foo: dyn ObjectClone);
 /// # fn main() {}
 /// ```
 #[macro_export(local_inner_macros)]
@@ -529,7 +529,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct GenericBar<T>(T);
-    interfaces!(<T: Debug + 'static> GenericBar<T>: dyn super::ObjectClone, dyn Debug where T: Clone);
+    interfaces!(<T: Debug + 'static + Send + Sync> GenericBar<T>: dyn super::ObjectClone, dyn Debug where T: Clone);
 
     #[test]
     fn test_ref() {
@@ -576,24 +576,24 @@ mod tests {
     #[test]
     fn test_rc() {
         let x = Rc::new(Bar) as Rc<dyn super::Object>;
-        let foo: Result<Rc<dyn Foo>, _> = super::Object::query_rc(x.clone());
+        let foo: Result<Rc<dyn Foo>, _> = <dyn super::Object>::query_rc(x.clone());
         assert!(foo.is_ok());
         assert!(foo.unwrap().test());
-        let foo2: Result<Rc<dyn Foo2>, _> = super::Object::query_rc(x.clone());
+        let foo2: Result<Rc<dyn Foo2>, _> = <dyn super::Object>::query_rc(x.clone());
         assert!(foo2.is_err());
-        let bar: Result<Rc<Bar>, _> = super::Object::query_rc(x.clone());
+        let bar: Result<Rc<Bar>, _> = <dyn super::Object>::query_rc(x.clone());
         assert!(bar.is_ok());
     }
 
     #[test]
     fn test_arc() {
         let x = Arc::new(Bar) as Arc<dyn super::Object>;
-        let foo: Result<Arc<dyn Foo>, _> = super::Object::query_arc(x.clone());
+        let foo: Result<Arc<dyn Foo>, _> = <dyn super::Object>::query_arc(x.clone());
         assert!(foo.is_ok());
         assert!(foo.unwrap().test());
-        let foo2: Result<Arc<dyn Foo2>, _> = super::Object::query_arc(x.clone());
+        let foo2: Result<Arc<dyn Foo2>, _> = <dyn super::Object>::query_arc(x.clone());
         assert!(foo2.is_err());
-        let bar: Result<Arc<dyn Bar>, _> = super::Object::query_arc(x.clone());
+        let bar: Result<Arc<Bar>, _> = <dyn super::Object>::query_arc(x.clone());
         assert!(bar.is_ok());
     }
 
@@ -622,6 +622,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "dynamic")]
     #[test]
     fn test_dynamic() {
         let x = Box::new(Bar) as Box<dyn super::Object>;
@@ -629,7 +630,7 @@ mod tests {
         assert!(dyn1.is_none());
 
         dynamic_interfaces! {
-            Bar: Dynamic;
+            Bar: dyn Dynamic;
         }
 
         let dyn2: Option<&dyn Dynamic> = x.query_ref();
