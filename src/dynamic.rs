@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use std::cell::RefCell;
 
-use VTable;
+use crate::VTable;
 
 type RegistryKey = (TypeId, TypeId);
 
@@ -101,7 +101,7 @@ macro_rules! dynamic_interfaces {
     ($($name:ty: $($iface:ty),+;)*) => (
         $crate::dynamic::with_registry_mut(|registry| { unsafe { $(
             registry.register::<$name, $name>($crate::VTable::none());
-            registry.register::<$name, $crate::Object>(vtable_for!($name as $crate::Object));
+            registry.register::<$name, dyn $crate::Object>(vtable_for!($name as dyn $crate::Object));
             $(
             registry.register::<$name, $iface>(vtable_for!($name as $iface));
             )+
